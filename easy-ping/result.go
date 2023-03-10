@@ -1,4 +1,4 @@
-package main
+package easy_ping
 
 import (
 	"fmt"
@@ -20,6 +20,11 @@ type Result struct {
 	Table  *table.Table
 }
 
+var (
+	WarnColor = text.Colors{text.BgRed}
+	LossCount = 0
+)
+
 func NewResult(f, t string) *Result {
 	return &Result{
 		File:  f,
@@ -29,21 +34,40 @@ func NewResult(f, t string) *Result {
 }
 
 func (r *Result) GlobalConfigSet() error {
-	r.Table.SetColumnConfigs([]table.ColumnConfig{
-		{
-			Align:        text.AlignLeft,
-			AlignFooter:  text.AlignLeft,
-			AlignHeader:  text.AlignLeft,
-			Colors:       text.Colors{text.BgBlack, text.FgRed},
-			ColorsHeader: text.Colors{text.BgRed, text.FgBlack, text.Bold},
-			ColorsFooter: text.Colors{text.BgRed, text.FgBlack},
-			Hidden:       false,
-			VAlign:       text.VAlignMiddle,
-			VAlignFooter: text.VAlignTop,
-			VAlignHeader: text.VAlignBottom,
-			WidthMin:     6,
-			WidthMax:     64,
-		}})
+	warnTransformer := text.Transformer(func(val interface{}) string {
+		if val.(float64) > 0 {
+			// 统计丢包服务器总数
+			return WarnColor.Sprintf("%v%%", val)
+		}
+		return fmt.Sprintf("%v%%", val)
+	})
+
+	config := []table.ColumnConfig{}
+	for _, v := range []string{"ID", "IP", "Num", "PacketsRecv", "AvgRtt"} {
+		config = append(config, table.ColumnConfig{
+			Name:        v,
+			Align:       text.AlignCenter,
+			AlignFooter: text.AlignCenter,
+			AlignHeader: text.AlignCenter,
+		})
+	}
+
+	config = append(config, table.ColumnConfig{
+		Name:         "PacketLoss",
+		Align:        text.AlignCenter,
+		AlignFooter:  text.AlignCenter,
+		AlignHeader:  text.AlignCenter,
+		Hidden:       false,
+		Transformer:  warnTransformer,
+		VAlign:       text.VAlignMiddle,
+		VAlignFooter: text.VAlignTop,
+		VAlignHeader: text.VAlignBottom,
+		WidthMin:     6,
+		WidthMax:     64,
+	})
+
+	r.Table.SetColumnConfigs(config)
+
 	return nil
 }
 
@@ -56,26 +80,29 @@ func (r *Result) ResultOutPut() error {
 		excel := fmt.Sprintf("ping_%v.xlsx", now)
 		return writeToExcel(excel, r.Output)
 	} else {
-		// 生成表格
+		// Make Table
 		r.Table.SetOutputMirror(os.Stdout)
-
+		err := r.GlobalConfigSet()
+		if err != nil {
+			return err
+		}
 		r.Table.AppendHeader(table.Row{"ID", "IP", "Num", "PacketsRecv", "PacketLoss", "AvgRtt"})
 		for k, v := range r.Output {
-			// t.AppendRow([]interface{}{fmt.Sprintf("%v", k+1), v.IP, fmt.Sprintf("%v", v.Num), fmt.Sprintf("%v", v.PacketsRecv), fmt.Sprintf("%v%%", v.PacketLoss), fmt.Sprintf("%v", v.AvgRtt)})
-			r.Table.AppendRow([]interface{}{k + 1, v.IP, v.Num, v.PacketsRecv, fmt.Sprintf("%v%%", v.PacketLoss), v.AvgRtt})
+			if v.PacketLoss > 0 {
+				LossCount += 1
+			}
+			r.Table.AppendRow([]interface{}{k + 1, v.IP, v.Num, v.PacketsRecv, v.PacketLoss, v.AvgRtt})
 		}
-
+		r.Table.AppendFooter(table.Row{"", "Total", "Total", "Total", "Total", LossCount}, table.RowConfig{AutoMerge: true})
 		switch r.Type {
 
 		case "csv":
 			r.Table.RenderCSV()
 
 		default:
-			fmt.Println("Unknown output format or stdout. Will use stdout as output type.")
 			r.Table.Render()
 
 		}
-
 	}
 	return nil
 }
